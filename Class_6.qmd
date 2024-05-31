@@ -3,3 +3,154 @@ title: "Class_6"
 format: html
 ---
 
+# Class
+## Dataimport
+```{r}
+library("readr")
+library("sf")
+
+
+wildschwein_BE <- read_delim("Data/wildschwein_BE_2056.csv", ",") |>
+    st_as_sf(coords = c("E", "N"), crs = 2056, remove = FALSE)
+```
+
+IMporting wildboar data from csv 
+<<- Very generic data format
+- reasonable for points... 
+
+But to import a geopackage, we can use st_read/ read_sf
+```{r}
+feldaufnahme <- st_read("Data/Feldaufnahmen_Fanel.gpkg")
+```
+
+The import gives us some metadata, which we should give a wuick look
+
+## Dataexploration
+```{r}
+View(feldaufnahme)
+
+# The condole gives us more information 
+feldaufnahme
+str(feldaufnahme)
+
+plot(feldaufnahme)
+# creates on plot per column (weird)
+# to Just plot one column 
+plot(feldaufnahme["Frucht"])
+```
+
+The plot function is much faster in computation time than ggplot. It is thus very usefull for exploration... 
+
+## Join datasets
+### VIsually
+```{r}
+library(ggplot2)
+library(lubridate)
+library(dplyr)
+
+# filter wildboardata to only use data for which there is existing crop data
+wildschwein_BE
+mayjune <- wildschwein_BE |> 
+  mutate(month = month(DatetimeUTC)) |> 
+  filter(month >= 5, month <= 6)
+
+ggplot() +
+  geom_sf(data = feldaufnahme,
+          aes(fill= Frucht)) +
+  geom_sf(data= mayjune,
+          aes(shape = TierName), alpha=.1 )+
+  theme(legend.position = "none")
+```
+
+## Annotate Wilboar data with crop information
+```{r}
+?st_join
+
+joined <- st_join(mayjune, feldaufnahme) #this join doesn't need by=, it uses the geometry automatically
+View(joined)
+```
+
+When Wildboar is outside of feldaufnahme area, the FIeld ID and Frucht is NA
+When Wildboar is not inside an agricultural field, the FieldID = 0 and the Frucht= Wald/Feuchtgebiet
+
+## VIsulize
+```{r}
+library(forcats) #very good library for dealing with factor levels (used for lumping)
+
+joined |> 
+  mutate(
+    hour = hour(DatetimeUTC),
+    Frucht = fct_lump(Frucht, 5)) |> #lumps the Frucht category to the 5 most dominant (do this make plot more readable )
+  st_drop_geometry() |> 
+  count(TierName, hour, Frucht) |> 
+  # How many times was rosa in an Acker
+  group_by(TierName, hour) |> 
+  mutate(
+    n_total = sum(n), 
+    perc = n/n_total) |> 
+  #make the plot
+  ggplot(aes(hour, perc, color= Frucht)) +
+  geom_line() +
+  facet_wrap(~TierName)
+ 
+```
+
+## Use a different join method than intersect
+
+You can look up different join functions in help!
+```{r}
+joined2 <- st_join(mayjune, feldaufnahme, join = st_within) #this join doesn't need by=, it uses the geometry automatically
+View(joined2)
+
+joined2 |> 
+  mutate(
+    hour = hour(DatetimeUTC),
+    Frucht = fct_lump(Frucht, 5)) |> #lumps the Frucht category to the 5 most dominant (do this make plot more readable )
+  st_drop_geometry() |> 
+  count(TierName, hour, Frucht) |> 
+  # How many times was rosa in an Acker
+  group_by(TierName, hour) |> 
+  mutate(
+    n_total = sum(n), 
+    perc = n/n_total) |> 
+  #make the plot
+  ggplot(aes(hour, perc, color= Frucht)) +
+  geom_line() +
+  facet_wrap(~TierName)
+
+```
+
+## Rasterdata
+```{r}
+# load raster data
+library(terra)
+
+
+veg <- rast("Data/vegetationshoehe_LFI.tif")
+# veg <- terra:: project(veg, "epsg:2056") 
+# this line of code ensures, that the raster data is in the same projection as our wildboar data
+
+plot(veg)
+
+#extract information from the vegetationshähe to your wildboar data
+?extract
+
+extract <- extract(veg, joined) #the warning 
+joined$vegetationshoehe <- extract$vegetationshoehe_LFI
+```
+
+### Visualizing added raster data
+```{r}
+
+joined |> 
+  mutate(
+    hour = hour(DatetimeUTC)) |> 
+  group_by(TierName, hour) |> 
+  summarise(
+    mean = mean(vegetationshoehe, na.rm = T)
+  ) |> 
+  ggplot(aes(hour, mean, color = TierName)) +
+  geom_line() 
+
+```
+
